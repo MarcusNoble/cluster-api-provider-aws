@@ -117,6 +117,10 @@ func (s *Service) reconcileCluster(ctx context.Context) error {
 		return errors.Wrap(err, "failed updating cluster tags")
 	}
 
+	if err := s.reconcileOIDCProvider(cluster); err != nil {
+		return errors.Wrap(err, "failed reconciling OIDC provider for cluster")
+	}
+
 	return nil
 }
 
@@ -526,4 +530,19 @@ func (s *Service) describeEKSCluster(eksClusterName string) (*eks.Cluster, error
 	}
 
 	return out.Cluster, nil
+}
+
+func (s *Service) reconcileOIDCProvider(cluster *eks.Cluster) error {
+	if !s.scope.ControlPlane.Spec.AssociateOIDCProvider || s.scope.ControlPlane.Status.OIDCProvider.ARN != "" {
+		return nil
+	}
+	oidcProvider, err := s.CreateOIDCProvider(cluster)
+	if err != nil {
+		return errors.Wrap(err, "failed to create OIDC provider")
+	}
+	s.scope.ControlPlane.Status.OIDCProvider.ARN = oidcProvider
+	if err := s.scope.PatchObject(); err != nil {
+		return errors.Wrap(err, "failed to update control plane with OIDC provider ARN")
+	}
+	return nil
 }
