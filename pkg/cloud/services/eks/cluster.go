@@ -546,3 +546,16 @@ func (s *Service) reconcileOIDCProvider(cluster *eks.Cluster) error {
 	}
 	return nil
 }
+
+func (s *Service) deleteOIDCProvider() error {
+	if !s.scope.ControlPlane.Spec.AssociateOIDCProvider || s.scope.ControlPlane.Status.OIDCProvider.ARN == "" {
+		return nil
+	}
+
+	providerARN := s.scope.ControlPlane.Status.OIDCProvider.ARN
+	if err := s.DeleteOIDCProvider(&providerARN); err != nil {
+		return errors.Wrap(err, "failed to delete OIDC provider")
+	}
+
+	return nil
+}

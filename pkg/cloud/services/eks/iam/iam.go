@@ -389,3 +389,15 @@ func fetchRootCAThumbprint(issuerURL *url.URL) (string, error) {
 	sha1Sum := sha1.Sum(rootCA.Raw)
 	return hex.EncodeToString(sha1Sum[:]), nil
 }
+
+func (s *IAMService) DeleteOIDCProvider(arn *string) error {
+	input := iam.DeleteOpenIDConnectProviderInput{
+		OpenIDConnectProviderArn: arn,
+	}
+
+	_, err := s.IAMClient.DeleteOpenIDConnectProvider(&input)
+	if err != nil {
+		return errors.Wrap(err, "error deleting provider")
+	}
+	return nil
+}
