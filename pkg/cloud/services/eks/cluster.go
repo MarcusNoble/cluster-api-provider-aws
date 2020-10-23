@@ -118,7 +118,7 @@ func (s *Service) reconcileCluster(ctx context.Context) error {
 	}
 
 	if err := s.reconcileOIDCProvider(cluster); err != nil {
-		return errors.Wrapf(err, "failed reconciling OIDC provider for cluster")
+		return errors.Wrap(err, "failed reconciling OIDC provider for cluster")
 	}
 
 	return nil
