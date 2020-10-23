@@ -531,31 +531,3 @@ func (s *Service) describeEKSCluster(eksClusterName string) (*eks.Cluster, error
 
 	return out.Cluster, nil
 }
-
-func (s *Service) reconcileOIDCProvider(cluster *eks.Cluster) error {
-	if !s.scope.ControlPlane.Spec.AssociateOIDCProvider || s.scope.ControlPlane.Status.OIDCProvider.ARN != "" {
-		return nil
-	}
-	oidcProvider, err := s.CreateOIDCProvider(cluster)
-	if err != nil {
-		return errors.Wrap(err, "failed to create OIDC provider")
-	}
-	s.scope.ControlPlane.Status.OIDCProvider.ARN = oidcProvider
-	if err := s.scope.PatchObject(); err != nil {
-		return errors.Wrap(err, "failed to update control plane with OIDC provider ARN")
-	}
-	return nil
-}
-
-func (s *Service) deleteOIDCProvider() error {
-	if !s.scope.ControlPlane.Spec.AssociateOIDCProvider || s.scope.ControlPlane.Status.OIDCProvider.ARN == "" {
-		return nil
-	}
-
-	providerARN := s.scope.ControlPlane.Status.OIDCProvider.ARN
-	if err := s.DeleteOIDCProvider(&providerARN); err != nil {
-		return errors.Wrap(err, "failed to delete OIDC provider")
-	}
-
-	return nil
-}
