@@ -359,11 +359,14 @@ const stsAWSAudience = "sts.amazonaws.com"
 
 func (s *IAMService) CreateOIDCProvider(cluster *eks.Cluster) (string, error) {
 	issuerURL, err := url.Parse(*cluster.Identity.Oidc.Issuer)
+	if err != nil {
+		return "", err
+	}
 	if issuerURL.Scheme != "https" {
 		return "", errors.Errorf("invalid scheme for issuer URL %s", issuerURL.String())
 	}
 
-	thumbprint, err := fetchRootCAThumbprint(issuerURL)
+	thumbprint, err := fetchRootCAThumbprint(issuerURL.String())
 	if err != nil {
 		return "", err
 	}
@@ -379,14 +382,15 @@ func (s *IAMService) CreateOIDCProvider(cluster *eks.Cluster) (string, error) {
 	return *provider.OpenIDConnectProviderArn, nil
 }
 
-func fetchRootCAThumbprint(issuerURL *url.URL) (string, error) {
-	response, err := http.Get(issuerURL.String())
+func fetchRootCAThumbprint(issuerURL string) (string, error) {
+	response, err := http.Get(issuerURL)
 	if err != nil {
 		return "", err
 	}
+	defer response.Body.Close()
 
 	rootCA := response.TLS.PeerCertificates[len(response.TLS.PeerCertificates)-1]
-	sha1Sum := sha1.Sum(rootCA.Raw)
+	sha1Sum := sha1.Sum(rootCA.Raw) //nolint:gosec
 	return hex.EncodeToString(sha1Sum[:]), nil
 }
 

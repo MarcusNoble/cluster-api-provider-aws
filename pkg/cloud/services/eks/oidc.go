@@ -19,6 +19,7 @@ package eks
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"strings"
 
 	"github.com/aws/aws-sdk-go/service/eks"
@@ -27,6 +28,8 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	apiiam "sigs.k8s.io/cluster-api-provider-aws/cmd/clusterawsadm/api/iam/v1alpha1"
+	"sigs.k8s.io/cluster-api-provider-aws/cmd/clusterawsadm/converters"
 	"sigs.k8s.io/cluster-api/controllers/remote"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
@@ -34,20 +37,39 @@ import (
 var (
 	trustPolicyConfigMapName      = "boilerplate-oidc-trust-policy"
 	trustPolicyConfigMapNamespace = metav1.NamespaceDefault
+
+	whitespaceRe = regexp.MustCompile(`(?m)[\t\n]`)
 )
 
 func (s *Service) reconcileOIDCProvider(cluster *eks.Cluster) error {
 	if !s.scope.ControlPlane.Spec.AssociateOIDCProvider || s.scope.ControlPlane.Status.OIDCProvider.ARN != "" {
 		return nil
 	}
+
+	if !s.scope.EnableIAM() {
+		return errors.New("'AssociateOIDCProvider' provided without enabling the 'EKSEnableIAM' feature flag")
+	}
+
+	s.scope.Info("Reconciling EKS OIDC Provider", "cluster-name", cluster.Name)
 	oidcProvider, err := s.CreateOIDCProvider(cluster)
 	if err != nil {
 		return errors.Wrap(err, "failed to create OIDC provider")
 	}
 	s.scope.ControlPlane.Status.OIDCProvider.ARN = oidcProvider
+
+	policy, err := converters.IAMPolicyDocumentToJSON(s.buildOIDCTrustPolicy())
+	if err != nil {
+		return errors.Wrap(err, "failed to parse IAM policy")
+	}
+	s.scope.ControlPlane.Status.OIDCProvider.TrustPolicy = whitespaceRe.ReplaceAllString(policy, "")
 	if err := s.scope.PatchObject(); err != nil {
 		return errors.Wrap(err, "failed to update control plane with OIDC provider ARN")
 	}
+
+	if err := s.reconcileTrustPolicy(); err != nil {
+		return errors.Wrap(err, "failed to reconcile trust policy in workload cluster")
+	}
+
 	return nil
 }
 
@@ -81,16 +103,23 @@ func (s *Service) reconcileTrustPolicy() error {
 		return fmt.Errorf("getting %s/%s config map: %w", trustPolicyConfigMapNamespace, trustPolicyConfigMapName, err)
 	}
 
+	policy, err := converters.IAMPolicyDocumentToJSON(s.buildOIDCTrustPolicy())
+	if err != nil {
+		return errors.Wrap(err, "failed to parse IAM policy")
+	}
+
 	trustPolicyConfigMap.Data = map[string]string{
-		"trust-policy.json": s.buildOIDCTrustPolicy(),
+		"trust-policy.json": policy,
 	}
 
 	if trustPolicyConfigMap.UID == "" {
 		trustPolicyConfigMap.Name = trustPolicyConfigMapName
 		trustPolicyConfigMap.Namespace = trustPolicyConfigMapNamespace
+		s.V(2).Info("Creating new Trust Policy ConfigMap", "cluster", s.scope.Name(), "configmap", trustPolicyConfigMapName)
 		return remoteClient.Create(ctx, trustPolicyConfigMap)
 	}
 
+	s.V(2).Info("Updating existing Trust Policy ConfigMap", "cluster", s.scope.Name(), "configmap", trustPolicyConfigMapName)
 	return remoteClient.Update(ctx, trustPolicyConfigMap)
 }
 
@@ -104,30 +133,34 @@ func (s *Service) deleteOIDCProvider() error {
 		return errors.Wrap(err, "failed to delete OIDC provider")
 	}
 
+	s.scope.ControlPlane.Status.OIDCProvider.ARN = ""
+	if err := s.scope.PatchObject(); err != nil {
+		return errors.Wrap(err, "failed to update control plane with OIDC provider ARN")
+	}
+
 	return nil
 }
 
-func (s *Service) buildOIDCTrustPolicy() string {
+func (s *Service) buildOIDCTrustPolicy() apiiam.PolicyDocument {
 	providerARN := s.scope.ControlPlane.Status.OIDCProvider.ARN
+	conditionValue := providerARN[strings.Index(providerARN, "/")+1:] + ":sub"
 
-	return fmt.Sprintf(`{
-		"Version": "2012-10-17",
-		"Statement": [
-			{
-				"Sid": "",
-				"Effect": "Allow",
-				"Principal": {
-					"Federated": "%s"
+	return apiiam.PolicyDocument{
+		Version: "2012-10-17",
+		Statement: apiiam.Statements{
+			apiiam.StatementEntry{
+				Sid:    "",
+				Effect: "Allow",
+				Principal: apiiam.Principals{
+					apiiam.PrincipalFederated: apiiam.PrincipalID{providerARN},
 				},
-				"Action": "sts:AssumeRoleWithWebIdentity",
-				"Condition": {
-					"ForAnyValue:StringLike": {
-						"%s:sub": [
-							"system:serviceaccount:${SERVICE_ACCOUNT_NAMESPACE}:${SERVICE_ACCOUNT_NAME}"
-						]
-					}
-				}
-			}
-		]
-	}`, providerARN, providerARN[strings.Index(providerARN, "/")+1:])
+				Action: apiiam.Actions{"sts:AssumeRoleWithWebIdentity"},
+				Condition: apiiam.Conditions{
+					"ForAnyValue:StringLike": map[string][]string{
+						conditionValue: {"system:serviceaccount:${SERVICE_ACCOUNT_NAMESPACE}:${SERVICE_ACCOUNT_NAME}"},
+					},
+				},
+			},
+		},
+	}
 }
