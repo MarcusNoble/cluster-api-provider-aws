@@ -248,6 +248,18 @@ func (t Template) controllersPolicy() *iamv1.PolicyDocument {
 					},
 				},
 				Effect: iamv1.EffectAllow,
+			}, {
+				Action: iamv1.Actions{
+					"iam:ListOpenIDConnectProviders",
+					"iam:CreateOpenIDConnectProvider",
+					"iam:AddClientIDToOpenIDConnectProvider",
+					"iam:UpdateOpenIDConnectProviderThumbprint",
+					"iam:DeleteOpenIDConnectProvider",
+				},
+				Resource: iamv1.Resources{
+					"*",
+				},
+				Effect: iamv1.EffectAllow,
 			},
 		}...)
 	}
